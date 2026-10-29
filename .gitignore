@@ -1,0 +1,7 @@
+.DS_Store
+.build/
+BuildResources/
+CodexContinue.app/
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
