@@ -289,6 +289,19 @@ final class CodexAccessibilityController {
         case failed(String)
     }
 
+    /// Returns true if the main display is asleep or the macOS session is screen-locked.
+    func isScreenOffOrLocked() -> Bool {
+        if CGDisplayIsAsleep(CGMainDisplayID()) != 0 {
+            return true
+        }
+        if let sessionDict = CGSessionCopyCurrentDictionary() as? [String: Any],
+           let locked = sessionDict["CGSSessionScreenIsLocked"] as? Bool,
+           locked {
+            return true
+        }
+        return false
+    }
+
     /// Types the continuation message into the Codex composer and clicks Send,
     /// verifying that the active chat still matches `expectedChatTitle`.
     func sendContinueMessage(
@@ -345,22 +358,49 @@ final class CodexAccessibilityController {
             return .failed("Could not locate the 'Work with Codex' composer input in the active window.")
         }
 
-        // Step 1: Try setting focus + value directly via Accessibility first
-        _ = AXUIElementSetAttributeValue(composerNode.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-        let setValErr = AXUIElementSetAttributeValue(composerNode.element, kAXValueAttribute as CFString, message as CFTypeRef)
+        // Step 1: Pure Headless Accessibility Injection (works even when display is off or screen is locked)
+        for attempt in 1...3 {
+            _ = AXUIElementSetAttributeValue(appElement, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+            _ = AXUIElementPerformAction(windowElement, kAXRaiseAction as CFString)
+            _ = AXUIElementSetAttributeValue(composerNode.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+            _ = AXUIElementSetAttributeValue(composerNode.element, kAXValueAttribute as CFString, message as CFTypeRef)
 
-        usleep(140_000) // 140ms for React state update
+            // Poll up to 300ms for Electron React state to render and enable the Send button
+            for _ in 0..<5 {
+                usleep(60_000)
+                if let sendButton = findSendButton(
+                    in: windowElement,
+                    composerMinY: composerMinY,
+                    leftMaxX: leftSidebarMaxX,
+                    rightMinX: rightSidebarMinX
+                ) {
+                    if AXUIElementPerformAction(sendButton, kAXPressAction as CFString) == .success {
+                        return .sent
+                    }
+                }
+            }
 
-        // Check if the Send button is now present and enabled in the composer
-        if let sendButton = findSendButton(in: windowElement, composerMinY: composerMinY, leftMaxX: leftSidebarMaxX, rightMinX: rightSidebarMinX) {
-            let pressErr = AXUIElementPerformAction(sendButton, kAXPressAction as CFString)
-            if pressErr == .success {
-                return .sent
+            // Also try AXConfirmAction directly on the composer node if supported
+            if AXUIElementPerformAction(composerNode.element, kAXConfirmAction as CFString) == .success {
+                usleep(120_000)
+                let afterVal = getStringAttribute(composerNode.element, attribute: kAXValueAttribute)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if afterVal.isEmpty {
+                    return .sent
+                }
+            }
+
+            if !isScreenOffOrLocked() && attempt == 1 {
+                break
             }
         }
 
-        // Step 2: Electron ProseMirror/Lexical composer fallback:
-        // Activate window briefly, focus composer, insert text via clipboard-preserving paste or keystrokes, then press Send / Return.
+        if isScreenOffOrLocked() {
+            return .failed("Screen is locked/off and pure Accessibility send did not find an active Send button.")
+        }
+
+        // Step 2: Interactive fallback when screen is unlocked:
+        // Activate window briefly, focus composer, insert text via clipboard-preserving paste, then press Send / Return.
         let previouslyActiveApp = NSWorkspace.shared.frontmostApplication
         app.activate(options: [.activateIgnoringOtherApps])
         _ = AXUIElementPerformAction(windowElement, kAXRaiseAction as CFString)
@@ -372,7 +412,7 @@ final class CodexAccessibilityController {
         let currentComposerVal = getStringAttribute(composerNode.element, attribute: kAXValueAttribute)
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if setValErr != .success || currentComposerVal.lowercased() != message.lowercased() {
+        if currentComposerVal.lowercased() != message.lowercased() {
             pasteTextPreservingClipboard(message)
             usleep(140_000)
         }

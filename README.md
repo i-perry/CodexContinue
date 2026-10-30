@@ -37,6 +37,10 @@ When running multi-agent workflows in the Codex desktop app, keeping the primary
      - **Auto-resume after parsed reset time:** Parses the reset timestamp from the message, adds a configurable safety buffer (default `+2 min`), waits until the reset window arrives, and automatically sends `continue` to resume the session.
      - **Pause until manual resume:** Halts immediately and notifies you until you click **Resume Now**.
 
+6. **Keep Mac Awake / Screen-Off Mode (Toggleable in Guardrails)**
+   - Optional setting (enabled by default) that holds an `IOPMAssertion` (`PreventUserIdleSystemSleep`) and disables macOS App Nap while monitoring is active—keeping the session and timers running while allowing your display to turn off.
+   - Uses multi-attempt headless Accessibility injection (`kAXValueAttribute` + `kAXPressAction` / `kAXConfirmAction`) so `continue` can be dispatched even when the screen is turned off.
+
 ---
 
 ## Custom Menu Bar Status Icon Pack

@@ -492,6 +492,21 @@ struct MenuBarView: View {
                     Divider()
 
                     HStack {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Keep Mac Awake (Screen-Off Mode):")
+                                .font(.system(size: 10, weight: .medium))
+                            Text("Prevents App Nap & idle sleep while monitoring (allows display off)")
+                                .font(.system(size: 8.5))
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Toggle("", isOn: $engine.keepAwakeWhileMonitoring)
+                            .toggleStyle(.switch)
+                            .controlSize(.mini)
+                            .labelsHidden()
+                    }
+
+                    HStack {
                         Text("Launch at Login:")
                             .font(.system(size: 10))
                             .foregroundColor(.secondary)

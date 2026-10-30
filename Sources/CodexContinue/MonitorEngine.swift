@@ -1,12 +1,20 @@
 import AppKit
 import Combine
 import Foundation
+import IOKit.pwr_mgt
 import ServiceManagement
 @preconcurrency import UserNotifications
 
 @MainActor
 final class MonitorEngine: ObservableObject {
     // MARK: - Persisted Settings
+    @Published var keepAwakeWhileMonitoring: Bool {
+        didSet {
+            UserDefaults.standard.set(keepAwakeWhileMonitoring, forKey: "keepAwakeWhileMonitoring")
+            updatePowerAssertion()
+        }
+    }
+
     @Published var launchAtLogin: Bool = (SMAppService.mainApp.status == .enabled) {
         didSet {
             guard launchAtLogin != (SMAppService.mainApp.status == .enabled) else { return }
@@ -88,9 +96,17 @@ final class MonitorEngine: ObservableObject {
     private var usageLimitResumeAt: Date?
     private var usageLimitDetectedMessage: String?
     private var suppressedUsageLimitMessage: String?
+    private var activityToken: NSObjectProtocol?
+    private var powerAssertionID: IOPMAssertionID = 0
+    private var hasPowerAssertion: Bool = false
 
     init() {
         let defaults = UserDefaults.standard
+        if defaults.object(forKey: "keepAwakeWhileMonitoring") == nil {
+            self.keepAwakeWhileMonitoring = true
+        } else {
+            self.keepAwakeWhileMonitoring = defaults.bool(forKey: "keepAwakeWhileMonitoring")
+        }
         self.targetChatTitle = defaults.string(forKey: "targetChatTitle") ?? "Clone the Klimper app"
         self.continueMessageText = defaults.string(forKey: "continueMessageText") ?? "continue"
         self.completionPhrase = defaults.string(forKey: "completionPhrase") ?? "Decomp analysis is completed 100%"
@@ -212,6 +228,7 @@ final class MonitorEngine: ObservableObject {
     // MARK: - Monitoring Loop
 
     private func handleMonitoringToggle() {
+        updatePowerAssertion()
         if isMonitoringEnabled {
             usageLimitDetectedMessage = nil
             usageLimitResumeAt = nil
@@ -227,6 +244,36 @@ final class MonitorEngine: ObservableObject {
             usageLimitDetectedMessage = nil
             phase = .disabled
             addLog("Paused monitoring.", important: false)
+        }
+    }
+
+    private func updatePowerAssertion() {
+        let shouldHoldAssertion = isMonitoringEnabled && keepAwakeWhileMonitoring
+
+        if shouldHoldAssertion {
+            if activityToken == nil {
+                activityToken = ProcessInfo.processInfo.beginActivity(
+                    options: [.idleSystemSleepDisabled, .userInitiated],
+                    reason: "CodexContinue monitoring active Codex session while screen is off"
+                )
+            }
+            if !hasPowerAssertion {
+                let reason = "CodexContinue monitoring active Codex session" as CFString
+                let type = kIOPMAssertionTypePreventUserIdleSystemSleep as CFString
+                if IOPMAssertionCreateWithName(type, IOPMAssertionLevel(kIOPMAssertionLevelOn), reason, &powerAssertionID) == kIOReturnSuccess {
+                    hasPowerAssertion = true
+                }
+            }
+        } else {
+            if let token = activityToken {
+                ProcessInfo.processInfo.endActivity(token)
+                activityToken = nil
+            }
+            if hasPowerAssertion {
+                IOPMAssertionRelease(powerAssertionID)
+                powerAssertionID = 0
+                hasPowerAssertion = false
+            }
         }
     }
 
